@@ -1,6 +1,10 @@
 # --- target ---
 CONFIG_IDF_TARGET="esp32"
 
+# --- 4 MB flash on wESP32 ---
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
 # --- partition table with two OTA slots ---
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
@@ -13,9 +17,10 @@ CONFIG_ETH_PHY_INTERFACE_RMII=y
 CONFIG_ETH_RMII_CLK_INPUT=y
 CONFIG_ETH_RMII_CLK_IN_GPIO=0
 
-# --- httpd / lwip — give us headroom for OTA upload + UART reads ---
+# --- httpd / lwip — headroom for OTA upload, multi-UART, WS streamer ---
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
 CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_WS_SUPPORT=y
 CONFIG_LWIP_MAX_SOCKETS=10
 
 # --- log level ---

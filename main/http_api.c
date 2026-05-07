@@ -4,19 +4,17 @@
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
+#include "esp_netif.h"
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "cJSON.h"
 #include "probe.h"
 
 static const char *TAG = "http-api";
+static httpd_handle_t s_srv = NULL;
 
-/* Pins safe for general GPIO use on WESP32:
- *   - Avoid Ethernet RMII: 0, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27
- *   - Avoid flash: 6-11
- *   - UART bridge defaults occupy 32, 33 (changeable)
- *   - Strapping pins (0, 2, 5, 12, 15) work but mind boot levels
- * Allow any user pin and let them shoot their foot — this is a debug probe.
- */
+/* GPIO whitelist — see uart pinout for the reasoning. */
 static bool pin_allowed(int g)
 {
     if (g < 0 || g > 39) return false;
@@ -32,10 +30,10 @@ static esp_err_t send_json(httpd_req_t *r, cJSON *j, int status)
     char *s = cJSON_PrintUnformatted(j);
     httpd_resp_set_type(r, "application/json");
     if (status == 400) httpd_resp_set_status(r, "400 Bad Request");
+    else if (status == 404) httpd_resp_set_status(r, "404 Not Found");
     else if (status == 500) httpd_resp_set_status(r, "500 Internal Server Error");
     httpd_resp_sendstr(r, s ? s : "{}");
-    free(s);
-    cJSON_Delete(j);
+    free(s); cJSON_Delete(j);
     return ESP_OK;
 }
 
@@ -61,22 +59,32 @@ static char *read_body(httpd_req_t *r, size_t max)
     return buf;
 }
 
-/* ---- /info ---- */
+/* Extract the {N} from /uart/N/... — returns -1 on malformed URI. */
+static int uri_uart_port(const char *uri)
+{
+    const char *p = strstr(uri, "/uart/");
+    if (!p) return -1;
+    p += 6;
+    if (*p < '1' || *p > '9') return -1;
+    return *p - '0';
+}
+
+/* ===================== /info ===================== */
 static esp_err_t info_get(httpd_req_t *r)
 {
     const esp_app_desc_t *a = esp_app_get_description();
+    const esp_partition_t *run = esp_ota_get_running_partition();
     cJSON *j = cJSON_CreateObject();
     cJSON_AddStringToObject(j, "app", a->project_name);
     cJSON_AddStringToObject(j, "version", a->version);
     cJSON_AddStringToObject(j, "idf", a->idf_ver);
     cJSON_AddStringToObject(j, "build", a->date);
+    cJSON_AddStringToObject(j, "running_partition", run ? run->label : "?");
+    cJSON_AddNumberToObject(j, "uart_ports", UART_BRIDGE_PORTS);
     return send_json(r, j, 200);
 }
 
-/* ---- /gpio ----
- * GET  /gpio?pin=N           -> {"pin":N,"level":0|1}
- * POST /gpio  {"pin":N,"mode":"in|out|in_pu|in_pd","level":0|1}
- */
+/* ===================== /gpio ===================== */
 static esp_err_t gpio_get(httpd_req_t *r)
 {
     char q[32]; int pin = -1;
@@ -101,26 +109,23 @@ static esp_err_t gpio_post(httpd_req_t *r)
     int pin = cJSON_GetObjectItem(j, "pin") ? cJSON_GetObjectItem(j, "pin")->valueint : -1;
     cJSON *jmode = cJSON_GetObjectItem(j, "mode");
     cJSON *jlvl  = cJSON_GetObjectItem(j, "level");
-
     if (!pin_allowed(pin)) { cJSON_Delete(j); return send_err(r, 400, "bad pin"); }
 
-    gpio_config_t g = { .pin_bit_mask = 1ULL << pin,
-                        .intr_type = GPIO_INTR_DISABLE,
-                        .mode = GPIO_MODE_INPUT,
-                        .pull_up_en = 0, .pull_down_en = 0 };
     if (jmode && cJSON_IsString(jmode)) {
+        gpio_config_t g = { .pin_bit_mask = 1ULL << pin,
+                            .intr_type = GPIO_INTR_DISABLE,
+                            .mode = GPIO_MODE_INPUT,
+                            .pull_up_en = 0, .pull_down_en = 0 };
         const char *m = jmode->valuestring;
-        if (!strcmp(m, "out"))         g.mode = GPIO_MODE_OUTPUT;
-        else if (!strcmp(m, "in"))     g.mode = GPIO_MODE_INPUT;
-        else if (!strcmp(m, "in_pu")){ g.mode = GPIO_MODE_INPUT; g.pull_up_en = 1; }
-        else if (!strcmp(m, "in_pd")){ g.mode = GPIO_MODE_INPUT; g.pull_down_en = 1; }
-        else if (!strcmp(m, "od"))     g.mode = GPIO_MODE_OUTPUT_OD;
+        if      (!strcmp(m, "out"))  g.mode = GPIO_MODE_OUTPUT;
+        else if (!strcmp(m, "in"))   g.mode = GPIO_MODE_INPUT;
+        else if (!strcmp(m, "in_pu")){g.mode = GPIO_MODE_INPUT; g.pull_up_en = 1; }
+        else if (!strcmp(m, "in_pd")){g.mode = GPIO_MODE_INPUT; g.pull_down_en = 1; }
+        else if (!strcmp(m, "od"))   g.mode = GPIO_MODE_OUTPUT_OD;
         else { cJSON_Delete(j); return send_err(r, 400, "bad mode"); }
         gpio_config(&g);
     }
-    if (jlvl && cJSON_IsNumber(jlvl)) {
-        gpio_set_level(pin, jlvl->valueint ? 1 : 0);
-    }
+    if (jlvl && cJSON_IsNumber(jlvl)) gpio_set_level(pin, jlvl->valueint ? 1 : 0);
     cJSON_Delete(j);
 
     cJSON *resp = cJSON_CreateObject();
@@ -129,19 +134,26 @@ static esp_err_t gpio_post(httpd_req_t *r)
     return send_json(r, resp, 200);
 }
 
-/* ---- /uart/config ---- */
+/* ===================== /uart/N/... ===================== */
+static cJSON *uart_cfg_json(int port)
+{
+    uart_cfg_t c; uart_bridge_get_config(port, &c);
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddNumberToObject(j, "port", port);
+    cJSON_AddNumberToObject(j, "baud", c.baud);
+    cJSON_AddNumberToObject(j, "data", c.data);
+    cJSON_AddNumberToObject(j, "parity", c.parity);
+    cJSON_AddNumberToObject(j, "stop", c.stop);
+    cJSON_AddNumberToObject(j, "tx_gpio", c.tx);
+    cJSON_AddNumberToObject(j, "rx_gpio", c.rx);
+    return j;
+}
+
 static esp_err_t uart_cfg_get(httpd_req_t *r)
 {
-    int b, d, p, s, tx, rx;
-    uart_bridge_get_config(&b, &d, &p, &s, &tx, &rx);
-    cJSON *j = cJSON_CreateObject();
-    cJSON_AddNumberToObject(j, "baud", b);
-    cJSON_AddNumberToObject(j, "data", d);
-    cJSON_AddNumberToObject(j, "parity", p);
-    cJSON_AddNumberToObject(j, "stop", s);
-    cJSON_AddNumberToObject(j, "tx_gpio", tx);
-    cJSON_AddNumberToObject(j, "rx_gpio", rx);
-    return send_json(r, j, 200);
+    int port = uri_uart_port(r->uri);
+    if (!uart_port_valid(port)) return send_err(r, 404, "bad uart port");
+    return send_json(r, uart_cfg_json(port), 200);
 }
 
 static int json_int_or(cJSON *j, const char *k, int dflt)
@@ -152,30 +164,35 @@ static int json_int_or(cJSON *j, const char *k, int dflt)
 
 static esp_err_t uart_cfg_post(httpd_req_t *r)
 {
+    int port = uri_uart_port(r->uri);
+    if (!uart_port_valid(port)) return send_err(r, 404, "bad uart port");
     char *body = read_body(r, 256);
     if (!body) return send_err(r, 400, "body required");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return send_err(r, 400, "bad json");
 
-    int baud = json_int_or(j, "baud", -1);
-    int data = json_int_or(j, "data", -1);
-    int par  = json_int_or(j, "parity", -1);
-    int stop = json_int_or(j, "stop", -1);
-    int tx   = json_int_or(j, "tx_gpio", -1);
-    int rx   = json_int_or(j, "rx_gpio", -1);
+    uart_cfg_t in = {
+        .baud   = json_int_or(j, "baud",    -1),
+        .data   = json_int_or(j, "data",    -1),
+        .parity = json_int_or(j, "parity",  -1),
+        .stop   = json_int_or(j, "stop",    -1),
+        .tx     = json_int_or(j, "tx_gpio", -1),
+        .rx     = json_int_or(j, "rx_gpio", -1),
+    };
     cJSON_Delete(j);
 
-    if (tx >= 0 && !pin_allowed(tx)) return send_err(r, 400, "bad tx pin");
-    if (rx >= 0 && !pin_allowed(rx)) return send_err(r, 400, "bad rx pin");
+    if (in.tx >= 0 && !pin_allowed(in.tx)) return send_err(r, 400, "bad tx pin");
+    if (in.rx >= 0 && !pin_allowed(in.rx)) return send_err(r, 400, "bad rx pin");
 
-    esp_err_t e = uart_bridge_reconfigure(baud, data, par, stop, tx, rx);
-    if (e != ESP_OK) return send_err(r, 500, "reconfigure failed");
-    return uart_cfg_get(r);
+    if (uart_bridge_reconfigure(port, &in) != ESP_OK)
+        return send_err(r, 500, "reconfigure failed");
+    return send_json(r, uart_cfg_json(port), 200);
 }
 
-/* ---- /uart/write — raw body bytes go out the UART ---- */
 static esp_err_t uart_write_post(httpd_req_t *r)
 {
+    int port = uri_uart_port(r->uri);
+    if (!uart_port_valid(port)) return send_err(r, 404, "bad uart port");
     if (r->content_len == 0 || r->content_len > 16384)
         return send_err(r, 400, "0 < len <= 16384");
     uint8_t buf[1024];
@@ -184,18 +201,20 @@ static esp_err_t uart_write_post(httpd_req_t *r)
         size_t want = remaining > sizeof buf ? sizeof buf : remaining;
         int n = httpd_req_recv(r, (char *)buf, want);
         if (n <= 0) return send_err(r, 500, "recv failed");
-        int w = uart_bridge_write(buf, n);
+        int w = uart_bridge_write(port, buf, n);
         if (w < 0) return send_err(r, 500, "uart write failed");
         written += w; remaining -= n;
     }
     cJSON *j = cJSON_CreateObject();
+    cJSON_AddNumberToObject(j, "port", port);
     cJSON_AddNumberToObject(j, "written", written);
     return send_json(r, j, 200);
 }
 
-/* ---- /uart/read?max=N&timeout_ms=M — body is raw bytes ---- */
 static esp_err_t uart_read_get(httpd_req_t *r)
 {
+    int port = uri_uart_port(r->uri);
+    if (!uart_port_valid(port)) return send_err(r, 404, "bad uart port");
     int max = 1024, tmo = 100;
     char q[64], v[16];
     if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK) {
@@ -207,7 +226,7 @@ static esp_err_t uart_read_get(httpd_req_t *r)
 
     uint8_t *buf = malloc(max);
     if (!buf) return send_err(r, 500, "oom");
-    int n = uart_bridge_read(buf, max, tmo);
+    int n = uart_bridge_read(port, buf, max, tmo);
     httpd_resp_set_type(r, "application/octet-stream");
     char hdr[16]; snprintf(hdr, sizeof hdr, "%d", n < 0 ? 0 : n);
     httpd_resp_set_hdr(r, "X-UART-Bytes", hdr);
@@ -216,7 +235,108 @@ static esp_err_t uart_read_get(httpd_req_t *r)
     return ESP_OK;
 }
 
-/* ---- /ota — POST raw firmware binary to flash next slot, then reboot ---- */
+/* WS handler: handshake on first call (method GET), then frames.
+ * Binary frames in -> uart write. RX bytes -> binary frames out (handled by
+ * the per-port reader task in uart_bridge.c). */
+static esp_err_t uart_ws_handler(httpd_req_t *r)
+{
+    int port = uri_uart_port(r->uri);
+    if (!uart_port_valid(port)) return send_err(r, 404, "bad uart port");
+
+    if (r->method == HTTP_GET) {
+        int fd = httpd_req_to_sockfd(r);
+        uart_bridge_set_ws_sink(port, s_srv, fd);
+        ESP_LOGI(TAG, "ws open uart%d fd=%d", port, fd);
+        return ESP_OK;
+    }
+
+    httpd_ws_frame_t f = {0};
+    esp_err_t e = httpd_ws_recv_frame(r, &f, 0);
+    if (e != ESP_OK) return e;
+    if (f.len == 0)  return ESP_OK;
+    f.payload = malloc(f.len);
+    if (!f.payload) return ESP_ERR_NO_MEM;
+    e = httpd_ws_recv_frame(r, &f, f.len);
+    if (e == ESP_OK) {
+        if (f.type == HTTPD_WS_TYPE_BINARY || f.type == HTTPD_WS_TYPE_TEXT)
+            uart_bridge_write(port, f.payload, f.len);
+        else if (f.type == HTTPD_WS_TYPE_CLOSE)
+            uart_bridge_set_ws_sink(port, NULL, -1);
+    }
+    free(f.payload);
+    return e;
+}
+
+/* ===================== /net ===================== */
+static esp_err_t net_get(httpd_req_t *r)
+{
+    net_cfg_t c; net_cfg_load(&c);
+    esp_netif_ip_info_t info = {0};
+    esp_netif_t *nif = esp_netif_get_handle_from_ifkey("ETH_DEF");
+    if (nif) esp_netif_get_ip_info(nif, &info);
+    char ip[16], nm[16], gw[16];
+    esp_ip4addr_ntoa(&info.ip, ip, sizeof ip);
+    esp_ip4addr_ntoa(&info.netmask, nm, sizeof nm);
+    esp_ip4addr_ntoa(&info.gw, gw, sizeof gw);
+
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddStringToObject(j, "mode", c.mode == NET_STATIC ? "static" : "dhcp");
+    cJSON_AddStringToObject(j, "hostname", c.hostname);
+    cJSON_AddStringToObject(j, "configured_ip", c.ip);
+    cJSON_AddStringToObject(j, "configured_netmask", c.netmask);
+    cJSON_AddStringToObject(j, "configured_gw", c.gw);
+    cJSON_AddStringToObject(j, "configured_dns", c.dns);
+    cJSON_AddStringToObject(j, "current_ip", ip);
+    cJSON_AddStringToObject(j, "current_netmask", nm);
+    cJSON_AddStringToObject(j, "current_gw", gw);
+    return send_json(r, j, 200);
+}
+
+static void copy_str(char *dst, size_t cap, cJSON *j, const char *k)
+{
+    cJSON *x = cJSON_GetObjectItem(j, k);
+    if (x && cJSON_IsString(x) && x->valuestring)
+        strncpy(dst, x->valuestring, cap - 1);
+}
+
+static esp_err_t net_post(httpd_req_t *r)
+{
+    char *body = read_body(r, 512);
+    if (!body) return send_err(r, 400, "body required");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return send_err(r, 400, "bad json");
+
+    net_cfg_t c; net_cfg_load(&c);
+    cJSON *m = cJSON_GetObjectItem(j, "mode");
+    if (m && cJSON_IsString(m)) {
+        if      (!strcmp(m->valuestring, "static")) c.mode = NET_STATIC;
+        else if (!strcmp(m->valuestring, "dhcp"))   c.mode = NET_DHCP;
+        else { cJSON_Delete(j); return send_err(r, 400, "mode must be dhcp|static"); }
+    }
+    memset(c.ip, 0, sizeof c.ip);
+    memset(c.netmask, 0, sizeof c.netmask);
+    memset(c.gw, 0, sizeof c.gw);
+    memset(c.dns, 0, sizeof c.dns);
+    copy_str(c.ip,       sizeof c.ip,       j, "ip");
+    copy_str(c.netmask,  sizeof c.netmask,  j, "netmask");
+    copy_str(c.gw,       sizeof c.gw,       j, "gw");
+    copy_str(c.dns,      sizeof c.dns,      j, "dns");
+    copy_str(c.hostname, sizeof c.hostname, j, "hostname");
+    if (!c.hostname[0]) strcpy(c.hostname, "wesp-probe");
+    cJSON_Delete(j);
+
+    if (c.mode == NET_STATIC && (!c.ip[0] || !c.netmask[0]))
+        return send_err(r, 400, "static mode requires ip and netmask");
+
+    if (net_cfg_save(&c) != ESP_OK) return send_err(r, 500, "nvs save failed");
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "saved", true);
+    cJSON_AddStringToObject(resp, "note", "reboot to apply");
+    return send_json(r, resp, 200);
+}
+
+/* ===================== /ota ===================== */
 static esp_err_t ota_post(httpd_req_t *r)
 {
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
@@ -229,15 +349,15 @@ static esp_err_t ota_post(httpd_req_t *r)
     char buf[2048];
     int total = 0, n;
     while ((n = httpd_req_recv(r, buf, sizeof buf)) > 0) {
-        if ((e = esp_ota_write(h, buf, n)) != ESP_OK) {
+        if ((e = esp_ota_write(h, (const void *)buf, n)) != ESP_OK) {
             esp_ota_abort(h);
             return send_err(r, 500, "ota_write failed");
         }
         total += n;
     }
     if (n < 0) { esp_ota_abort(h); return send_err(r, 500, "recv failed"); }
-
-    if ((e = esp_ota_end(h)) != ESP_OK) return send_err(r, 500, "ota_end failed (image invalid?)");
+    if ((e = esp_ota_end(h)) != ESP_OK)
+        return send_err(r, 500, "ota_end failed (image invalid?)");
     if ((e = esp_ota_set_boot_partition(part)) != ESP_OK)
         return send_err(r, 500, "set_boot failed");
 
@@ -246,14 +366,13 @@ static esp_err_t ota_post(httpd_req_t *r)
     cJSON_AddStringToObject(j, "next", part->label);
     cJSON_AddBoolToObject(j, "rebooting", true);
     send_json(r, j, 200);
-
     ESP_LOGW(TAG, "OTA complete (%d bytes), rebooting", total);
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
     return ESP_OK;
 }
 
-/* ---- /reboot ---- */
+/* ===================== /reboot ===================== */
 static esp_err_t reboot_post(httpd_req_t *r)
 {
     httpd_resp_sendstr(r, "{\"rebooting\":true}");
@@ -264,28 +383,32 @@ static esp_err_t reboot_post(httpd_req_t *r)
 
 esp_err_t http_api_start(void)
 {
-    httpd_handle_t srv = NULL;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 16;
+    cfg.uri_match_fn      = httpd_uri_match_wildcard;
+    cfg.max_uri_handlers  = 24;
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
-    cfg.stack_size = 8192;
-    ESP_ERROR_CHECK(httpd_start(&srv, &cfg));
+    cfg.stack_size        = 8192;
+    cfg.lru_purge_enable  = true;
+    ESP_ERROR_CHECK(httpd_start(&s_srv, &cfg));
 
     httpd_uri_t routes[] = {
-        { "/info",         HTTP_GET,  info_get,       NULL },
-        { "/gpio",         HTTP_GET,  gpio_get,       NULL },
-        { "/gpio",         HTTP_POST, gpio_post,      NULL },
-        { "/uart/config",  HTTP_GET,  uart_cfg_get,   NULL },
-        { "/uart/config",  HTTP_POST, uart_cfg_post,  NULL },
-        { "/uart/write",   HTTP_POST, uart_write_post,NULL },
-        { "/uart/read",    HTTP_GET,  uart_read_get,  NULL },
-        { "/ota",          HTTP_POST, ota_post,       NULL },
-        { "/reboot",       HTTP_POST, reboot_post,    NULL },
+        { "/info",            HTTP_GET,  info_get,        NULL, false, false, NULL },
+        { "/gpio",            HTTP_GET,  gpio_get,        NULL, false, false, NULL },
+        { "/gpio",            HTTP_POST, gpio_post,       NULL, false, false, NULL },
+        { "/uart/?/config",   HTTP_GET,  uart_cfg_get,    NULL, false, false, NULL },
+        { "/uart/?/config",   HTTP_POST, uart_cfg_post,   NULL, false, false, NULL },
+        { "/uart/?/write",    HTTP_POST, uart_write_post, NULL, false, false, NULL },
+        { "/uart/?/read",     HTTP_GET,  uart_read_get,   NULL, false, false, NULL },
+        { "/uart/?/ws",       HTTP_GET,  uart_ws_handler, NULL, true,  false, NULL },
+        { "/net",             HTTP_GET,  net_get,         NULL, false, false, NULL },
+        { "/net",             HTTP_POST, net_post,        NULL, false, false, NULL },
+        { "/ota",             HTTP_POST, ota_post,        NULL, false, false, NULL },
+        { "/reboot",          HTTP_POST, reboot_post,     NULL, false, false, NULL },
     };
     for (size_t i = 0; i < sizeof routes / sizeof *routes; ++i)
-        ESP_ERROR_CHECK(httpd_register_uri_handler(srv, &routes[i]));
+        ESP_ERROR_CHECK(httpd_register_uri_handler(s_srv, &routes[i]));
 
-    ESP_LOGI(TAG, "http api started on :80");
+    ESP_LOGI(TAG, "http api on :80");
     return ESP_OK;
 }
