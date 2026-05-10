@@ -1,6 +1,14 @@
+set(srcs "main.c" "http_api.c" "uart_bridge.c" "net_config.c" "eth_init.c")
+set(reqs esp_eth esp_netif esp_http_server nvs_flash driver app_update
+         esp_https_ota json esp_ringbuf mdns lwip)
+
+if(CONFIG_PROBE_CAMERA)
+    list(APPEND srcs "camera.c")
+    list(APPEND reqs esp32-camera)
+endif()
+
 idf_component_register(
-    SRCS "main.c" "http_api.c" "uart_bridge.c" "net_config.c"
+    SRCS ${srcs}
     INCLUDE_DIRS "."
-    REQUIRES esp_eth esp_netif esp_http_server nvs_flash driver app_update
-             esp_https_ota json esp_ringbuf mdns lwip
+    REQUIRES ${reqs}
 )

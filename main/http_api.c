@@ -14,16 +14,8 @@
 static const char *TAG = "http-api";
 static httpd_handle_t s_srv = NULL;
 
-/* GPIO whitelist — see uart pinout for the reasoning. */
-static bool pin_allowed(int g)
-{
-    if (g < 0 || g > 39) return false;
-    if (g >= 6 && g <= 11) return false;          /* SPI flash */
-    if (g == 16 || g == 17) return false;         /* MDC/MDIO */
-    if (g == 0 || g == 18 || g == 19 || g == 21 ||
-        g == 22 || g == 23 || g == 25 || g == 26 || g == 27) return false; /* RMII */
-    return true;
-}
+/* GPIO whitelist — board-specific reservations live in eth_init.c. */
+static bool pin_allowed(int g) { return !probe_pin_reserved(g); }
 
 static esp_err_t send_json(httpd_req_t *r, cJSON *j, int status)
 {
@@ -80,7 +72,13 @@ static esp_err_t info_get(httpd_req_t *r)
     cJSON_AddStringToObject(j, "idf", a->idf_ver);
     cJSON_AddStringToObject(j, "build", a->date);
     cJSON_AddStringToObject(j, "running_partition", run ? run->label : "?");
+    cJSON_AddStringToObject(j, "board", PROBE_BOARD_NAME);
     cJSON_AddNumberToObject(j, "uart_ports", UART_BRIDGE_PORTS);
+#if CONFIG_PROBE_CAMERA
+    cJSON_AddBoolToObject(j, "camera", true);
+#else
+    cJSON_AddBoolToObject(j, "camera", false);
+#endif
     return send_json(r, j, 200);
 }
 
@@ -396,11 +394,6 @@ esp_err_t http_api_start(void)
         { "/info",            HTTP_GET,  info_get,        NULL, false, false, NULL },
         { "/gpio",            HTTP_GET,  gpio_get,        NULL, false, false, NULL },
         { "/gpio",            HTTP_POST, gpio_post,       NULL, false, false, NULL },
-        { "/uart/?/config",   HTTP_GET,  uart_cfg_get,    NULL, false, false, NULL },
-        { "/uart/?/config",   HTTP_POST, uart_cfg_post,   NULL, false, false, NULL },
-        { "/uart/?/write",    HTTP_POST, uart_write_post, NULL, false, false, NULL },
-        { "/uart/?/read",     HTTP_GET,  uart_read_get,   NULL, false, false, NULL },
-        { "/uart/?/ws",       HTTP_GET,  uart_ws_handler, NULL, true,  false, NULL },
         { "/net",             HTTP_GET,  net_get,         NULL, false, false, NULL },
         { "/net",             HTTP_POST, net_post,        NULL, false, false, NULL },
         { "/ota",             HTTP_POST, ota_post,        NULL, false, false, NULL },
@@ -408,6 +401,28 @@ esp_err_t http_api_start(void)
     };
     for (size_t i = 0; i < sizeof routes / sizeof *routes; ++i)
         ESP_ERROR_CHECK(httpd_register_uri_handler(s_srv, &routes[i]));
+
+    /* Per-port UART routes — registered explicitly because ESP-IDF's
+     * httpd wildcard match doesn't treat '?' as a single-char wildcard. */
+    for (int port = 1; port <= UART_BRIDGE_PORTS; ++port) {
+        char *cfg_uri  = malloc(24); snprintf(cfg_uri,  24, "/uart/%d/config", port);
+        char *wr_uri   = malloc(24); snprintf(wr_uri,   24, "/uart/%d/write",  port);
+        char *rd_uri   = malloc(24); snprintf(rd_uri,   24, "/uart/%d/read",   port);
+        char *ws_uri   = malloc(24); snprintf(ws_uri,   24, "/uart/%d/ws",     port);
+        httpd_uri_t uart_routes[] = {
+            { cfg_uri, HTTP_GET,  uart_cfg_get,    NULL, false, false, NULL },
+            { cfg_uri, HTTP_POST, uart_cfg_post,   NULL, false, false, NULL },
+            { wr_uri,  HTTP_POST, uart_write_post, NULL, false, false, NULL },
+            { rd_uri,  HTTP_GET,  uart_read_get,   NULL, false, false, NULL },
+            { ws_uri,  HTTP_GET,  uart_ws_handler, NULL, true,  false, NULL },
+        };
+        for (size_t i = 0; i < sizeof uart_routes / sizeof *uart_routes; ++i)
+            ESP_ERROR_CHECK(httpd_register_uri_handler(s_srv, &uart_routes[i]));
+    }
+
+#if CONFIG_PROBE_CAMERA
+    probe_camera_register_routes(s_srv);
+#endif
 
     ESP_LOGI(TAG, "http api on :80");
     return ESP_OK;

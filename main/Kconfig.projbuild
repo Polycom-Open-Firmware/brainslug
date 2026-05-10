@@ -1,0 +1,27 @@
+menu "Probe board"
+
+choice PROBE_BOARD
+    prompt "Target board"
+    default PROBE_BOARD_WESP32 if IDF_TARGET_ESP32
+    default PROBE_BOARD_S3_POE_ETH_CAM if IDF_TARGET_ESP32S3
+    help
+        Selects which physical board this firmware targets. The eth init
+        path, GPIO whitelist, and presence of the camera endpoints all
+        change based on this.
+
+config PROBE_BOARD_WESP32
+    bool "Silicognition wESP32 (ESP32 + LAN8720, internal EMAC over RMII)"
+    depends on IDF_TARGET_ESP32
+
+config PROBE_BOARD_S3_POE_ETH_CAM
+    bool "Waveshare ESP32-S3-POE-ETH-CAM-KIT (ESP32-S3 + W5500 SPI eth + OV2640)"
+    depends on IDF_TARGET_ESP32S3
+
+endchoice
+
+config PROBE_CAMERA
+    bool "Expose /camera HTTP endpoints (OV2640 via esp32-camera)"
+    depends on PROBE_BOARD_S3_POE_ETH_CAM
+    default y
+
+endmenu

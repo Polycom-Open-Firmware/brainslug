@@ -1,27 +1,35 @@
 # wesp_debug_probe
 
-Network-attached debug probe firmware for the
-[Silicognition wESP32](https://hackaday.io/project/85389-wesp32-wired-esp32-with-ethernet-and-poe)
-(PoE-powered ESP32 + LAN8720). Exposes an HTTP + WebSocket API so an agent
-can wiggle GPIOs, transceive two independent UARTs at runtime-configurable
-baud, and push new firmware over Ethernet.
+Network-attached debug probe firmware. Exposes an HTTP + WebSocket API so an
+agent can wiggle GPIOs, transceive two independent UARTs at runtime-configurable
+baud, push new firmware over Ethernet, and (on camera-equipped boards) grab
+JPEG snapshots / MJPEG streams.
 
-## Build & flash (first time, USB)
+## Supported boards
+
+Pick at build time with `idf.py set-target` — Kconfig auto-selects the right
+`PROBE_BOARD_*` from `sdkconfig.defaults.<target>`.
+
+| Target        | Board                                    | Eth        | Camera | mDNS                |
+| ------------- | ---------------------------------------- | ---------- | ------ | ------------------- |
+| `esp32`       | Silicognition wESP32 (LAN8720, PoE)      | int. EMAC  | —      | `wesp-probe.local`  |
+| `esp32s3`     | Waveshare ESP32-S3-POE-ETH-CAM-KIT       | W5500 SPI  | OV2640 | `s3-probe.local`    |
+
+## Build & flash
 
 ESP-IDF v5.3.x. The LXC at `tc8` already has it set up at `~/esp-idf`.
 
 ```sh
 . $IDF_PATH/export.sh
-idf.py set-target esp32
-idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
+# wESP32:
+idf.py set-target esp32 && idf.py build && idf.py -p /dev/ttyUSB0 flash monitor
+# Waveshare S3-POE-ETH-CAM:
+idf.py set-target esp32s3 && idf.py build && idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-After the first flash the probe joins via DHCP and announces itself on
-mDNS as `wesp-probe.local`.
+## Hardware pinouts
 
-## Hardware pinout
-
+### wESP32 (`esp32` target)
 | Function       | GPIO          |
 | -------------- | ------------- |
 | RMII REF_CLK   | 0  (input from external 50 MHz oscillator) |
@@ -30,8 +38,15 @@ mDNS as `wesp-probe.local`.
 | UART1 TX / RX (default) | 33 / 32 |
 | UART2 TX / RX (default) | 13 / 14 |
 
-UART pins are runtime-overridable. Pins 6–11 are flash; everything else not
-in the RMII set is fair game via `/gpio`.
+### ESP32-S3-POE-ETH-CAM (`esp32s3` target)
+W5500 SPI: MOSI=11, MISO=13, SCLK=12, CS=14, INT=10, RST=9.
+OV2640: XCLK=15, SIOD=4, SIOC=5; D0..D7, VSYNC, HREF, PCLK on the camera
+header. UART1 default 43/44 (USB-serial header), UART2 default 1/2.
+**Pin numbers are board-revision sensitive — verify against your schematic
+and adjust `main/probe.h` if the link doesn't come up.**
+
+UART pins are runtime-overridable. Anything not flagged by
+`probe_pin_reserved()` (see `eth_init.c`) is fair game via `/gpio`.
 
 ## HTTP API
 
@@ -49,6 +64,9 @@ in the RMII set is fair game via `/gpio`.
 | POST | `/net`               | `{"mode":"dhcp\|static","ip":..,"netmask":..,"gw":..,"dns":..,"hostname":..}` | saved (reboot to apply) |
 | POST | `/ota`               | raw firmware `.bin`      | reboots into new image |
 | POST | `/reboot`            | —                        | reboots |
+| GET  | `/camera/info`       | —                        | sensor PID, framesize, quality (S3 only) |
+| GET  | `/camera/snapshot`   | —                        | one JPEG frame (S3 only) |
+| GET  | `/camera/stream`     | —                        | MJPEG `multipart/x-mixed-replace` (S3 only) |
 
 `{N}` is `1` or `2`. UART config is persisted to NVS — survives reboots.
 `parity`: 0=none, 1=odd, 2=even. All `/uart` config fields are optional.
