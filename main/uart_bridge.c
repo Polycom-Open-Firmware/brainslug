@@ -82,9 +82,14 @@ static void reader_task(void *arg)
     port_t *p = arg;
     uint8_t buf[512];
     while (1) {
+        /* Don't drain the RX ring unless a WS sink is consuming it —
+         * otherwise polled /uart/N/read sees nothing. */
+        if (p->ws_fd < 0 || !p->ws_srv) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
         int n = uart_read_bytes(p->hw, buf, sizeof buf, pdMS_TO_TICKS(20));
         if (n <= 0) continue;
-        if (p->ws_fd < 0 || !p->ws_srv) continue;
         ws_send_t *s = malloc(sizeof *s);
         if (!s) continue;
         s->srv = p->ws_srv; s->fd = p->ws_fd;
