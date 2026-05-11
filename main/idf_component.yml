@@ -4,4 +4,5 @@ dependencies:
     version: "^2.0.4"
     rules:
       - if: "target in [esp32s3]"
+  espressif/esp-dsp: "^1.4.12"
   idf: ">=5.0"

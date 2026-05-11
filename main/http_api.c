@@ -433,11 +433,22 @@ static esp_err_t reboot_post(httpd_req_t *r)
     return ESP_OK;
 }
 
+/* ===================== / (embedded index.html) ===================== */
+extern const uint8_t index_html_start[] asm("_binary_index_html_start");
+extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
+
+static esp_err_t index_get(httpd_req_t *r)
+{
+    httpd_resp_set_type(r, "text/html");
+    return httpd_resp_send(r, (const char *)index_html_start,
+                              index_html_end - index_html_start);
+}
+
 esp_err_t http_api_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.uri_match_fn      = httpd_uri_match_wildcard;
-    cfg.max_uri_handlers  = 24;
+    cfg.max_uri_handlers  = 32;
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
     cfg.stack_size        = 8192;
@@ -445,6 +456,7 @@ esp_err_t http_api_start(void)
     ESP_ERROR_CHECK(httpd_start(&s_srv, &cfg));
 
     httpd_uri_t routes[] = {
+        { "/",                HTTP_GET,  index_get,       NULL, false, false, NULL },
         { "/info",            HTTP_GET,  info_get,        NULL, false, false, NULL },
         { "/gpio",            HTTP_GET,  gpio_get,        NULL, false, false, NULL },
         { "/gpio",            HTTP_POST, gpio_post,       NULL, false, false, NULL },
@@ -482,6 +494,9 @@ esp_err_t http_api_start(void)
 
 #if CONFIG_PROBE_CAMERA
     probe_camera_register_routes(s_srv);
+#endif
+#if CONFIG_PROBE_AUDIO
+    audio_register_routes(s_srv);
 #endif
 
     ESP_LOGI(TAG, "http api on :80");

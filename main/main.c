@@ -74,6 +74,10 @@ void app_main(void)
     if (probe_camera_init() != ESP_OK)
         ESP_LOGW(TAG, "camera init failed — /camera endpoints will return errors");
 #endif
+#if CONFIG_PROBE_AUDIO
+    if (audio_init() != ESP_OK)
+        ESP_LOGW(TAG, "audio init failed — /audio/ws will be silent");
+#endif
 
     xEventGroupWaitBits(s_net_evt, NET_GOT_IP, pdFALSE, pdTRUE, portMAX_DELAY);
     mdns_start();

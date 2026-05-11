@@ -28,6 +28,10 @@
 #define UART2_DEFAULT_TX_GPIO       13
 #define UART2_DEFAULT_RX_GPIO       14
 
+/* ADC1 channel for the audio-regression mic. CH7 = GPIO35 — normally free
+ * on wESP32; wire an electret + bias to that pin. */
+#define ADC_MIC_CHANNEL             7
+
 #elif CONFIG_PROBE_BOARD_S3_POE_ETH_CAM
 /* Waveshare ESP32-S3-POE-ETH-CAM-KIT — W5500 over SPI + OV2640 + PoE.
  * Pin numbers come from Waveshare's reference docs; verify against your
@@ -80,6 +84,12 @@
 #define UART1_DEFAULT_RX_GPIO       44
 #define UART2_DEFAULT_TX_GPIO       17
 #define UART2_DEFAULT_RX_GPIO       16
+
+/* ADC1 channel for the audio-regression mic. With camera enabled almost
+ * every ADC1-capable GPIO is taken; this defaults to ADC1_CH0 (GPIO1 =
+ * CAM_VSYNC) under the assumption you'd disable CONFIG_PROBE_CAMERA when
+ * doing audio regression. Override per board if you have a free pin. */
+#define ADC_MIC_CHANNEL             0
 
 #else
 #error "No PROBE_BOARD_* selected. Run 'idf.py menuconfig' -> Probe board."
@@ -140,6 +150,14 @@ esp_err_t http_api_start(void);
 #if CONFIG_PROBE_CAMERA
 esp_err_t probe_camera_init(void);
 void      probe_camera_register_routes(httpd_handle_t srv);
+#endif
+
+/* ============================================================
+ * Audio (only when CONFIG_PROBE_AUDIO) — ADC1 mic capture + FFT + WS
+ * ============================================================ */
+#if CONFIG_PROBE_AUDIO
+esp_err_t audio_init(void);
+void      audio_register_routes(httpd_handle_t srv);
 #endif
 
 /* ============================================================

@@ -24,4 +24,15 @@ config PROBE_CAMERA
     depends on PROBE_BOARD_S3_POE_ETH_CAM
     default y
 
+config PROBE_AUDIO
+    bool "ADC mic capture + on-device FFT, streamed over /audio/ws"
+    default n
+    help
+        Captures audio from ADC_MIC_CHANNEL (see probe.h), runs a real-
+        valued FFT via esp-dsp, and streams magnitude bins over a
+        WebSocket at /audio/ws. Wire a crude electret + bias network
+        to the configured ADC pin. Used by the TC8 smoke harness to
+        verify audio output: TC8 plays a tone, brainslug confirms the
+        peak in the expected FFT bin.
+
 endmenu

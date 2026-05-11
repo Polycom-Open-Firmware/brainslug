@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# brainslug-ota — push a built brainslug.bin to a live brainslug over HTTP.
+# Usage:  brainslug-ota <host-or-ip> [build/brainslug.bin]
+set -euo pipefail
+host="${1:?usage: brainslug-ota <host> [bin]}"
+bin="${2:-build/brainslug.bin}"
+[ -f "$bin" ] || { echo "no firmware at $bin (did you idf.py build?)" >&2; exit 1; }
+echo "[+] OTA-ing $(wc -c <"$bin") bytes -> http://$host/ota"
+out=$(curl -fsS --max-time 120 -XPOST --data-binary @"$bin" \
+        -H "Content-Type: application/octet-stream" \
+        "http://$host/ota")
+echo "$out"
+echo "[+] waiting for slug to come back"
+until curl -fsS --max-time 3 "http://$host/info" >/dev/null 2>&1; do sleep 2; done
+curl -s "http://$host/info"
+echo

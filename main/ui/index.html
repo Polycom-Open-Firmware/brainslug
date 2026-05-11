@@ -1,0 +1,89 @@
+<!doctype html><html><head><meta charset="utf-8"><title>brainslug</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:system-ui,sans-serif;margin:0;background:#0c0c10;color:#e6e6e6}
+header{padding:8px 14px;background:#1a1a22;border-bottom:1px solid #333;display:flex;gap:12px;align-items:center}
+header h1{font-size:16px;margin:0;font-weight:600}
+#info{font-family:ui-monospace,monospace;font-size:12px;color:#8aa}
+main{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px;height:calc(100vh - 50px)}
+section{background:#15151b;border:1px solid #2a2a35;border-radius:6px;display:flex;flex-direction:column;min-height:200px}
+section h2{font-size:13px;font-weight:600;margin:0;padding:8px 12px;background:#1a1a22;border-bottom:1px solid #2a2a35}
+.controls{padding:6px 10px;display:flex;gap:8px;align-items:center;font-size:12px;background:#13131a;border-bottom:1px solid #2a2a35}
+.controls select,.controls button{background:#23232c;color:#e6e6e6;border:1px solid #3a3a4a;padding:3px 8px;border-radius:3px;font:inherit}
+#term{flex:1;overflow:auto;font-family:ui-monospace,monospace;font-size:12px;padding:8px;white-space:pre-wrap;word-break:break-all;background:#000;color:#9f9}
+#fft{flex:1}
+#fft-meta{padding:4px 10px;font-family:ui-monospace,monospace;font-size:11px;color:#8aa}
+</style></head>
+<body>
+<header>
+  <h1>brainslug</h1>
+  <span id="info">loading…</span>
+</header>
+<main>
+  <section>
+    <h2>serial</h2>
+    <div class="controls">
+      port <select id="port"><option value="1">1</option><option value="2">2</option></select>
+      <button id="connect">connect</button>
+      <button id="clear">clear</button>
+      <span id="ws-state">disconnected</span>
+    </div>
+    <div id="term"></div>
+  </section>
+  <section>
+    <h2>audio fft</h2>
+    <div id="fft-meta">no /audio/ws — enable PROBE_AUDIO and reflash</div>
+    <canvas id="fft" width="800" height="400"></canvas>
+  </section>
+</main>
+<script>
+fetch('/info').then(r=>r.json()).then(j=>{info.textContent=`${j.app} ${j.version} idf=${j.idf} board=${j.board} part=${j.running_partition}`});
+
+// Serial terminal over /uart/N/ws
+let ws=null;
+const term=document.getElementById('term');
+function append(s){term.textContent+=s;term.scrollTop=term.scrollHeight}
+document.getElementById('connect').onclick=()=>{
+  const port=document.getElementById('port').value;
+  if(ws){ws.close();ws=null}
+  ws=new WebSocket(`ws://${location.host}/uart/${port}/ws`);
+  ws.binaryType='arraybuffer';
+  ws.onopen=()=>{document.getElementById('ws-state').textContent=`connected uart/${port}`};
+  ws.onclose=()=>{document.getElementById('ws-state').textContent='disconnected'};
+  ws.onmessage=e=>append(new TextDecoder().decode(new Uint8Array(e.data)));
+};
+document.getElementById('clear').onclick=()=>{term.textContent=''};
+addEventListener('keydown',e=>{
+  if(!ws||ws.readyState!==1)return;
+  if(e.target.tagName==='SELECT'||e.target.tagName==='BUTTON')return;
+  let b=null;
+  if(e.key.length===1) b=new Uint8Array([e.key.charCodeAt(0)]);
+  else if(e.key==='Enter') b=new Uint8Array([13]);
+  else if(e.key==='Backspace') b=new Uint8Array([8]);
+  else if(e.key==='Tab') b=new Uint8Array([9]);
+  if(b){ws.send(b);e.preventDefault()}
+});
+
+// Audio FFT canvas
+const cvs=document.getElementById('fft'),ctx=cvs.getContext('2d');
+const audioWs=new WebSocket(`ws://${location.host}/audio/ws`);
+audioWs.binaryType='arraybuffer';
+audioWs.onopen=()=>{document.getElementById('fft-meta').textContent='streaming'};
+audioWs.onmessage=e=>{
+  const dv=new DataView(e.data);
+  const sr=dv.getUint32(0,true), n=dv.getUint32(4,true);
+  const bins=new Int16Array(e.data, 8, n);
+  const W=cvs.width,H=cvs.height;
+  ctx.fillStyle='#0a0a10'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#3aa';
+  const bw=W/n;
+  for(let i=0;i<n;i++){
+    const db=bins[i]/256;          // Q8.8 -> float dB
+    const norm=Math.max(0,Math.min(1,(db+90)/90));   // -90..0 dB -> 0..1
+    const h=norm*H;
+    ctx.fillRect(i*bw,H-h,Math.max(1,bw-0.5),h);
+  }
+  document.getElementById('fft-meta').textContent=`${sr} Hz, ${n} bins, ${(sr/2/n).toFixed(1)} Hz/bin`;
+};
+audioWs.onerror=()=>{document.getElementById('fft-meta').textContent='/audio/ws unavailable (build with PROBE_AUDIO=y)'};
+</script></body></html>
