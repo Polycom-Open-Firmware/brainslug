@@ -14,8 +14,8 @@
 #if CONFIG_PROBE_BOARD_WESP32
 /* Silicognition wESP32 — LAN8720, ext 50 MHz osc into GPIO0, no PHY pwr-en. */
 #define PROBE_BOARD_NAME            "wesp32"
-#define PROBE_HOSTNAME_DEFAULT      "wesp-probe"
-#define PROBE_MDNS_INSTANCE         "wESP32 debug probe"
+#define PROBE_HOSTNAME_DEFAULT      "brainslug"
+#define PROBE_MDNS_INSTANCE         "Brainslug (wESP32)"
 
 #define WESP_ETH_PHY_ADDR           0
 #define WESP_ETH_MDC_GPIO           16
@@ -34,8 +34,8 @@
  * board revision before flashing.
  */
 #define PROBE_BOARD_NAME            "s3-poe-eth-cam"
-#define PROBE_HOSTNAME_DEFAULT      "s3-probe"
-#define PROBE_MDNS_INSTANCE         "ESP32-S3 PoE/Cam debug probe"
+#define PROBE_HOSTNAME_DEFAULT      "brainslug"
+#define PROBE_MDNS_INSTANCE         "Brainslug (S3 PoE-Cam)"
 
 /* W5500 (SPI2 host) — from Waveshare wiki ESP32-S3-ETH. */
 #define W5500_SPI_HOST              1   /* SPI2_HOST */
@@ -103,6 +103,8 @@ int       uart_bridge_read(int port, uint8_t *buf, size_t max_len, uint32_t time
 esp_err_t uart_bridge_get_config(int port, uart_cfg_t *out);
 bool      uart_port_valid(int port);
 void      uart_bridge_set_ws_sink(int port, httpd_handle_t srv, int fd);
+esp_err_t uart_bridge_break(int port, uint32_t ms);
+esp_err_t uart_bridge_set_invert(int port, int rx_inv, int tx_inv);
 
 /* ============================================================
  * Net config

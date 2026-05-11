@@ -11,7 +11,7 @@ esp_err_t net_cfg_load(net_cfg_t *out)
 {
     memset(out, 0, sizeof *out);
     out->mode = NET_DHCP;
-    strcpy(out->hostname, "wesp-probe");
+    strcpy(out->hostname, "brainslug");
 
     nvs_handle_t h;
     if (nvs_open("probe", NVS_READONLY, &h) != ESP_OK) return ESP_OK;

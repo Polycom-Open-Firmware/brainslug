@@ -1,4 +1,4 @@
-# wesp_debug_probe
+# Brainslug
 
 Network-attached debug probe firmware. Exposes an HTTP + WebSocket API so an
 agent can wiggle GPIOs, transceive two independent UARTs at runtime-configurable

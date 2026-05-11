@@ -209,6 +209,60 @@ static esp_err_t uart_write_post(httpd_req_t *r)
     return send_json(r, j, 200);
 }
 
+static esp_err_t uart_swap_post(httpd_req_t *r)
+{
+    int port = uri_uart_port(r->uri);
+    if (!uart_port_valid(port)) return send_err(r, 404, "bad uart port");
+    uart_cfg_t cur; uart_bridge_get_config(port, &cur);
+    uart_cfg_t in = cur;
+    in.tx = cur.rx;
+    in.rx = cur.tx;
+    if (uart_bridge_reconfigure(port, &in) != ESP_OK)
+        return send_err(r, 500, "reconfigure failed");
+    return send_json(r, uart_cfg_json(port), 200);
+}
+
+/* POST /uart/<n>/break?ms=N — assert UART BREAK for N ms (default 250,
+ * clamped to 5000). Used by sysrq-b flows. Empty body. */
+static esp_err_t uart_break_post(httpd_req_t *r)
+{
+    int port = uri_uart_port(r->uri);
+    if (!uart_port_valid(port)) return send_err(r, 404, "bad uart port");
+    uint32_t ms = 250;
+    char q[32], v[16];
+    if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK &&
+        httpd_query_key_value(q, "ms", v, sizeof v) == ESP_OK) {
+        int n = atoi(v);
+        if (n > 0) ms = (uint32_t)n;
+    }
+    if (uart_bridge_break(port, ms) != ESP_OK)
+        return send_err(r, 500, "break failed");
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddNumberToObject(j, "port", port);
+    cJSON_AddNumberToObject(j, "break_ms", (double)ms);
+    return send_json(r, j, 200);
+}
+
+/* POST /uart/<n>/invert?rx=0|1&tx=0|1 — set TTL-level inversion. */
+static esp_err_t uart_invert_post(httpd_req_t *r)
+{
+    int port = uri_uart_port(r->uri);
+    if (!uart_port_valid(port)) return send_err(r, 404, "bad uart port");
+    int rx = 0, tx = 0;
+    char q[64], v[8];
+    if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK) {
+        if (httpd_query_key_value(q, "rx", v, sizeof v) == ESP_OK) rx = atoi(v);
+        if (httpd_query_key_value(q, "tx", v, sizeof v) == ESP_OK) tx = atoi(v);
+    }
+    if (uart_bridge_set_invert(port, rx, tx) != ESP_OK)
+        return send_err(r, 500, "invert failed");
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddNumberToObject(j, "port", port);
+    cJSON_AddBoolToObject(j, "rx_inv", rx != 0);
+    cJSON_AddBoolToObject(j, "tx_inv", tx != 0);
+    return send_json(r, j, 200);
+}
+
 static esp_err_t uart_read_get(httpd_req_t *r)
 {
     int port = uri_uart_port(r->uri);
@@ -409,12 +463,18 @@ esp_err_t http_api_start(void)
         char *wr_uri   = malloc(24); snprintf(wr_uri,   24, "/uart/%d/write",  port);
         char *rd_uri   = malloc(24); snprintf(rd_uri,   24, "/uart/%d/read",   port);
         char *ws_uri   = malloc(24); snprintf(ws_uri,   24, "/uart/%d/ws",     port);
+        char *sw_uri   = malloc(24); snprintf(sw_uri,   24, "/uart/%d/swap",   port);
+        char *br_uri   = malloc(24); snprintf(br_uri,   24, "/uart/%d/break",  port);
+        char *iv_uri   = malloc(24); snprintf(iv_uri,   24, "/uart/%d/invert", port);
         httpd_uri_t uart_routes[] = {
             { cfg_uri, HTTP_GET,  uart_cfg_get,    NULL, false, false, NULL },
             { cfg_uri, HTTP_POST, uart_cfg_post,   NULL, false, false, NULL },
             { wr_uri,  HTTP_POST, uart_write_post, NULL, false, false, NULL },
             { rd_uri,  HTTP_GET,  uart_read_get,   NULL, false, false, NULL },
             { ws_uri,  HTTP_GET,  uart_ws_handler, NULL, true,  false, NULL },
+            { sw_uri,  HTTP_POST, uart_swap_post,  NULL, false, false, NULL },
+            { br_uri,  HTTP_POST, uart_break_post, NULL, false, false, NULL },
+            { iv_uri,  HTTP_POST, uart_invert_post,NULL, false, false, NULL },
         };
         for (size_t i = 0; i < sizeof uart_routes / sizeof *uart_routes; ++i)
             ESP_ERROR_CHECK(httpd_register_uri_handler(s_srv, &uart_routes[i]));

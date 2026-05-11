@@ -166,3 +166,31 @@ void uart_bridge_set_ws_sink(int port, httpd_handle_t srv, int fd)
     p->ws_fd  = fd;
     ESP_LOGI(TAG, "uart%d ws sink fd=%d", (int)p->hw, fd);
 }
+
+/* Toggle TTL-level inversion on RX and/or TX. Use when the wire under test
+ * carries inverted polarity (e.g. dirt-cheap RS-232 -> TTL adapter that
+ * forgets the inverter, or a downstream level shifter that flips idle). */
+esp_err_t uart_bridge_set_invert(int port, int rx_inv, int tx_inv)
+{
+    port_t *p = P(port); if (!p) return ESP_ERR_INVALID_ARG;
+    uint32_t mask = 0;
+    if (rx_inv) mask |= UART_SIGNAL_RXD_INV;
+    if (tx_inv) mask |= UART_SIGNAL_TXD_INV;
+    return uart_set_line_inverse(p->hw, mask);
+}
+
+/* Drive TXD low for `ms` to assert a UART BREAK. Needed by sysrq-b flows
+ * that nudge a hung Linux into a forced reset. Implemented via
+ * uart_set_line_inverse: inverting TXD while idle makes it sit LOW, which
+ * is the BREAK condition; uninverting restores normal idle-HIGH. */
+esp_err_t uart_bridge_break(int port, uint32_t ms)
+{
+    port_t *p = P(port); if (!p) return ESP_ERR_INVALID_ARG;
+    if (ms == 0)    ms = 250;
+    if (ms > 5000)  ms = 5000;
+    uart_wait_tx_done(p->hw, pdMS_TO_TICKS(100));
+    esp_err_t e = uart_set_line_inverse(p->hw, UART_SIGNAL_TXD_INV);
+    if (e) return e;
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    return uart_set_line_inverse(p->hw, 0);
+}
