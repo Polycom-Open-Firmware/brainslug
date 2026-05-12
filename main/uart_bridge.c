@@ -151,6 +151,24 @@ esp_err_t uart_bridge_reconfigure(int port, const uart_cfg_t *in)
     if (in->stop   == 1 || in->stop == 2) n.stop  = in->stop;
     if (in->tx     >= 0)             n.tx     = in->tx;
     if (in->rx     >= 0)             n.rx     = in->rx;
+
+    /* Reject configurations that would collide with another port's pins —
+     * GPIO matrix output is one-to-one, so overlapping TX silently steals
+     * the wire from the other UART. Same hazard if either port's TX lands
+     * on another port's RX (it'd drive the input pin and override what the
+     * far end sends). Caller can move the other port off these pins first
+     * and re-try. */
+    for (int j = 0; j < UART_BRIDGE_PORTS; ++j) {
+        port_t *q = &g_ports[j];
+        if (q == p) continue;
+        if (n.tx == q->cfg.tx || n.tx == q->cfg.rx ||
+            n.rx == q->cfg.tx || n.rx == q->cfg.rx) {
+            ESP_LOGW(TAG, "uart%d reconfig rejected: pin %d/%d collides with uart%d (%d/%d)",
+                     port, n.tx, n.rx, j + 1, q->cfg.tx, q->cfg.rx);
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
     p->cfg = n;
     esp_err_t e = apply(p);
     if (e == ESP_OK) cfg_save_nvs(p);
