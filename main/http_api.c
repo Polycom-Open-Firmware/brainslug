@@ -287,33 +287,49 @@ static esp_err_t uart_read_get(httpd_req_t *r)
     return ESP_OK;
 }
 
-/* WS handler: handshake on first call (method GET), then frames.
- * Binary frames in -> uart write. RX bytes -> binary frames out (handled by
- * the per-port reader task in uart_bridge.c). */
+/* Full-duplex WS at /uart/N/ws.
+ *   client -> slug: binary/text frames flushed to UART TX via uart_bridge_write.
+ *   slug -> client: RX bytes pushed as binary frames by the per-port reader
+ *                   task in uart_bridge.c (it owns the sink fd).
+ * Single sink per port, last-wins: a new connection evicts the old one.
+ *
+ * Port number is carried in user_ctx (set at registration). r->uri is NOT
+ * usable here — ESP-IDF's init_req zeroes it on every incoming WS frame, so
+ * parsing the URI string would yield -1 and we'd 404-close the WS session. */
 static esp_err_t uart_ws_handler(httpd_req_t *r)
 {
-    int port = uri_uart_port(r->uri);
-    if (!uart_port_valid(port)) return send_err(r, 404, "bad uart port");
+    int port = (int)(intptr_t)r->user_ctx;
+    if (!uart_port_valid(port)) return ESP_FAIL;
+
+    int fd = httpd_req_to_sockfd(r);
 
     if (r->method == HTTP_GET) {
-        int fd = httpd_req_to_sockfd(r);
+        /* Initial upgrade — claim the sink. */
         uart_bridge_set_ws_sink(port, s_srv, fd);
         ESP_LOGI(TAG, "ws open uart%d fd=%d", port, fd);
         return ESP_OK;
     }
 
+    /* Frame arrived. Peek length first, then alloc + recv. */
     httpd_ws_frame_t f = {0};
     esp_err_t e = httpd_ws_recv_frame(r, &f, 0);
     if (e != ESP_OK) return e;
-    if (f.len == 0)  return ESP_OK;
+
+    if (f.type == HTTPD_WS_TYPE_CLOSE) {
+        uart_bridge_set_ws_sink(port, NULL, -1);
+        return ESP_OK;
+    }
+    if (f.type == HTTPD_WS_TYPE_PING || f.type == HTTPD_WS_TYPE_PONG)
+        return ESP_OK;  /* httpd auto-handles control frames; nothing to do. */
+
+    if (f.len == 0) return ESP_OK;
     f.payload = malloc(f.len);
     if (!f.payload) return ESP_ERR_NO_MEM;
     e = httpd_ws_recv_frame(r, &f, f.len);
-    if (e == ESP_OK) {
-        if (f.type == HTTPD_WS_TYPE_BINARY || f.type == HTTPD_WS_TYPE_TEXT)
-            uart_bridge_write(port, f.payload, f.len);
-        else if (f.type == HTTPD_WS_TYPE_CLOSE)
-            uart_bridge_set_ws_sink(port, NULL, -1);
+    if (e == ESP_OK && (f.type == HTTPD_WS_TYPE_BINARY || f.type == HTTPD_WS_TYPE_TEXT)) {
+        int w = uart_bridge_write(port, f.payload, f.len);
+        if (w < 0)
+            ESP_LOGW(TAG, "uart%d ws->tx write failed", port);
     }
     free(f.payload);
     return e;
@@ -449,8 +465,16 @@ esp_err_t http_api_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.uri_match_fn      = httpd_uri_match_wildcard;
     cfg.max_uri_handlers  = 32;
-    cfg.recv_wait_timeout = 30;
-    cfg.send_wait_timeout = 30;
+    /* Headroom for: 1 MJPEG stream, up to 2 UART WS clients, OTA upload, and
+     * a few concurrent short HTTP polls without LRU-evicting each other.
+     * lwip MAX_SOCK is 16; reserve a few for system use. */
+    cfg.max_open_sockets  = 13;
+    /* recv_wait shrunk from default so a half-open HTTP request is reaped
+     * before the socket cap fills. send_wait stays generous: it bounds how
+     * long a single outbound WS frame can block on a slow client; setting
+     * it too low triggers the sink-detach path on benign micro-stalls. */
+    cfg.recv_wait_timeout = 2;
+    cfg.send_wait_timeout = 10;
     cfg.stack_size        = 8192;
     cfg.lru_purge_enable  = true;
     ESP_ERROR_CHECK(httpd_start(&s_srv, &cfg));
@@ -483,7 +507,7 @@ esp_err_t http_api_start(void)
             { cfg_uri, HTTP_POST, uart_cfg_post,   NULL, false, false, NULL },
             { wr_uri,  HTTP_POST, uart_write_post, NULL, false, false, NULL },
             { rd_uri,  HTTP_GET,  uart_read_get,   NULL, false, false, NULL },
-            { ws_uri,  HTTP_GET,  uart_ws_handler, NULL, true,  false, NULL },
+            { ws_uri,  HTTP_GET,  uart_ws_handler, (void *)(intptr_t)port, true, false, NULL },
             { sw_uri,  HTTP_POST, uart_swap_post,  NULL, false, false, NULL },
             { br_uri,  HTTP_POST, uart_break_post, NULL, false, false, NULL },
             { iv_uri,  HTTP_POST, uart_invert_post,NULL, false, false, NULL },

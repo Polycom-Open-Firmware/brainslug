@@ -1,5 +1,6 @@
 #include <string.h>
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,6 +12,7 @@ static const char *TAG = "uart-bridge";
 typedef struct {
     uart_port_t hw;
     uart_cfg_t  cfg;
+    int            applied_tx, applied_rx; /* last pins we routed, -1 = none */
     httpd_handle_t ws_srv;
     int            ws_fd;     /* -1 when no streamer */
     TaskHandle_t   reader;
@@ -19,9 +21,9 @@ typedef struct {
 
 static port_t g_ports[UART_BRIDGE_PORTS] = {
     { .hw = UART_NUM_1, .cfg = { UART_DEFAULT_BAUD, 8, 0, 1, UART1_DEFAULT_TX_GPIO, UART1_DEFAULT_RX_GPIO },
-      .ws_fd = -1, .nvs_key = "uart1" },
+      .applied_tx = -1, .applied_rx = -1, .ws_fd = -1, .nvs_key = "uart1" },
     { .hw = UART_NUM_2, .cfg = { UART_DEFAULT_BAUD, 8, 0, 1, UART2_DEFAULT_TX_GPIO, UART2_DEFAULT_RX_GPIO },
-      .ws_fd = -1, .nvs_key = "uart2" },
+      .applied_tx = -1, .applied_rx = -1, .ws_fd = -1, .nvs_key = "uart2" },
 };
 
 bool uart_port_valid(int port) { return port >= 1 && port <= UART_BRIDGE_PORTS; }
@@ -40,8 +42,17 @@ static esp_err_t apply(port_t *p)
     };
     esp_err_t e = uart_param_config(p->hw, &cfg);
     if (e) return e;
-    return uart_set_pin(p->hw, p->cfg.tx, p->cfg.rx,
-                        UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    /* Disconnect any previous pin we owned before pointing the peripheral
+     * elsewhere, so an old GPIO doesn't keep this UART's signal latched.
+     * Crucial when /uart/N/config moves a port off pins that another UART
+     * also defaulted to — otherwise the leftover gpio_matrix_out for that
+     * pin sticks around and hijacks whichever UART claims it next. */
+    if (p->applied_tx >= 0 && p->applied_tx != p->cfg.tx) gpio_reset_pin(p->applied_tx);
+    if (p->applied_rx >= 0 && p->applied_rx != p->cfg.rx) gpio_reset_pin(p->applied_rx);
+    e = uart_set_pin(p->hw, p->cfg.tx, p->cfg.rx,
+                     UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (e == ESP_OK) { p->applied_tx = p->cfg.tx; p->applied_rx = p->cfg.rx; }
+    return e;
 }
 
 static void cfg_load_nvs(port_t *p)
@@ -65,7 +76,7 @@ static void cfg_save_nvs(const port_t *p)
 }
 
 /* Push received bytes to the websocket sink, if any. Runs in reader task. */
-typedef struct { httpd_handle_t srv; int fd; uint8_t *data; size_t len; } ws_send_t;
+typedef struct { httpd_handle_t srv; int fd; int port; uint8_t *data; size_t len; } ws_send_t;
 static void ws_send_work(void *arg)
 {
     ws_send_t *s = arg;
@@ -73,7 +84,16 @@ static void ws_send_work(void *arg)
         .final = true, .fragmented = false, .type = HTTPD_WS_TYPE_BINARY,
         .payload = s->data, .len = s->len,
     };
-    httpd_ws_send_frame_async(s->srv, s->fd, &f);
+    esp_err_t e = httpd_ws_send_frame_async(s->srv, s->fd, &f);
+    if (e != ESP_OK) {
+        /* Send failed — client is dead. Detach the sink (only if it's still us)
+         * so a reconnect doesn't get rejected and the reader_task stops queuing
+         * doomed work items. Best-effort close to recycle the httpd socket. */
+        port_t *p = P(s->port);
+        if (p && p->ws_fd == s->fd) { p->ws_srv = NULL; p->ws_fd = -1; }
+        if (s->srv) httpd_sess_trigger_close(s->srv, s->fd);
+        ESP_LOGW(TAG, "ws fd=%d send failed (%s); sink detached", s->fd, esp_err_to_name(e));
+    }
     free(s->data); free(s);
 }
 
@@ -93,6 +113,7 @@ static void reader_task(void *arg)
         ws_send_t *s = malloc(sizeof *s);
         if (!s) continue;
         s->srv = p->ws_srv; s->fd = p->ws_fd;
+        s->port = (int)(p - g_ports) + 1;
         s->data = malloc(n);
         if (!s->data) { free(s); continue; }
         memcpy(s->data, buf, n); s->len = n;
@@ -162,9 +183,15 @@ esp_err_t uart_bridge_get_config(int port, uart_cfg_t *out)
 void uart_bridge_set_ws_sink(int port, httpd_handle_t srv, int fd)
 {
     port_t *p = P(port); if (!p) return;
+    /* Last-wins: a new sink kicks the old one. Trigger close on the previous
+     * fd so the kernel reaps the socket and httpd can hand it out again. */
+    if (p->ws_fd >= 0 && fd >= 0 && fd != p->ws_fd && p->ws_srv) {
+        httpd_sess_trigger_close(p->ws_srv, p->ws_fd);
+        ESP_LOGI(TAG, "uart%d ws sink evicted fd=%d", (int)p->hw, p->ws_fd);
+    }
     p->ws_srv = srv;
     p->ws_fd  = fd;
-    ESP_LOGI(TAG, "uart%d ws sink fd=%d", (int)p->hw, fd);
+    if (fd >= 0) ESP_LOGI(TAG, "uart%d ws sink fd=%d", (int)p->hw, fd);
 }
 
 /* Toggle TTL-level inversion on RX and/or TX. Use when the wire under test

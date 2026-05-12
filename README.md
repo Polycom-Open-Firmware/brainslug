@@ -104,9 +104,15 @@ curl -XPOST --data-binary @build/wesp_debug_probe.bin http://wesp-probe.local/ot
 - **OTA rollback safety net:** new images boot in pending-verify state. After
   30 s of successful uptime the firmware self-marks-valid; if it crashes or
   is power-cycled before then, the bootloader reverts to the previous slot.
-- **WS exclusivity per port:** while a UART has an active WebSocket sink,
-  the polling `/uart/N/read` endpoint returns 0 bytes — the streamer
-  drains the RX ring. Only one WS client per port.
+- **`/uart/N/ws` is full-duplex.** Client→slug binary frames are flushed to
+  the UART TX FIFO; slug→client binary frames carry the UART RX bytes.
+  One sink per port, *last-wins*: a new connection closes the previous one,
+  so reconnects always succeed without waiting for the old fd to be reaped.
+  While a sink is attached, polling `/uart/N/read` returns 0 bytes (the
+  streamer drains the RX ring straight to the WS). For throughput-sensitive
+  flows (catching u-boot, terminal echo) prefer WS — HTTP `POST /uart/N/write`
+  has per-request handshake overhead that caps practical write rates around
+  ~60–100/s, vs >1 k/s over WS.
 - **Net config persistence:** `/net` saves to NVS, reboot to apply. Static
   mode requires `ip` + `netmask`; the rest are optional. Bad config → power
   cycle while holding GPIO 0 low to recover via USB and reflash.

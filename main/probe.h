@@ -79,11 +79,14 @@
 /* UART defaults — must avoid W5500 (9-14), camera (1-3,15,18,38-48 minus 43/44),
  * SD (4-7), USB JTAG (19/20), and N16R8 octal PSRAM/flash (26-37).
  * That leaves a small free set: 0(strap), 8, 16, 17, 21, 43, 44.
- * Use 43/44 (TX/RX of the broken-out USB-serial header) and 17/16. */
-#define UART1_DEFAULT_TX_GPIO       43
-#define UART1_DEFAULT_RX_GPIO       44
-#define UART2_DEFAULT_TX_GPIO       17
-#define UART2_DEFAULT_RX_GPIO       16
+ * UART1 owns the panel/probe header (17/16); UART2 owns the broken-out
+ * USB-serial header (43/44). Keep the two ports on disjoint pins so
+ * uart_bridge_init_all's second uart_set_pin call can't hijack the
+ * GPIO-matrix output of the first. */
+#define UART1_DEFAULT_TX_GPIO       17
+#define UART1_DEFAULT_RX_GPIO       16
+#define UART2_DEFAULT_TX_GPIO       43
+#define UART2_DEFAULT_RX_GPIO       44
 
 /* ADC1 channel for the audio-regression mic. With camera enabled almost
  * every ADC1-capable GPIO is taken; this defaults to ADC1_CH0 (GPIO1 =
