@@ -1,6 +1,6 @@
-set(srcs "main.c" "http_api.c" "uart_bridge.c" "net_config.c" "eth_init.c")
+set(srcs "main.c" "http_api.c" "uart_bridge.c" "net_config.c" "eth_init.c" "led.c")
 set(reqs esp_eth esp_netif esp_http_server nvs_flash driver app_update
-         esp_https_ota json esp_ringbuf mdns lwip esp_adc)
+         esp_https_ota json esp_ringbuf mdns lwip esp_adc led_strip)
 
 if(CONFIG_PROBE_CAMERA)
     list(APPEND srcs "camera.c")

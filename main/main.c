@@ -10,6 +10,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "probe.h"
+#include "led.h"
 
 static const char *TAG = "probe";
 static EventGroupHandle_t s_net_evt;
@@ -52,6 +53,10 @@ void ota_arm_auto_confirm(void) { xTaskCreate(ota_confirm_task, "ota-cf", 3072, 
 void app_main(void)
 {
     ESP_LOGI(TAG, "boot: board=%s", PROBE_BOARD_NAME);
+
+    /* Blank the onboard WS2812 (GPIO21) as early as possible — it powers
+     * up full-white and washes out the camera. */
+    led_init();
 
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {

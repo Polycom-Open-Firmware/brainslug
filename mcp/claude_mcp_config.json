@@ -1,0 +1,18 @@
+{
+  "_comment": "Drop the 'brainslug' entry into the mcpServers object of your client config. For Claude Code that's ~/.claude/settings.json; for Claude Desktop it's the platform-specific claude_desktop_config.json.",
+  "mcpServers": {
+    "brainslug": {
+      "command": "/home/alex/polycom_re/brainslug/mcp/brainslug_mcp.py",
+      "args": [],
+      "env": {
+        "BRAINSLUG_URL": "http://10.99.0.35"
+      }
+    }
+  },
+  "_alt_explicit_uv": {
+    "_comment": "Use this form if the bare shebang isn't honored (e.g. uv not on PATH for the MCP launcher).",
+    "command": "uv",
+    "args": ["run", "--script", "/home/alex/polycom_re/brainslug/mcp/brainslug_mcp.py"],
+    "env": { "BRAINSLUG_URL": "http://10.99.0.35" }
+  }
+}

@@ -1,21 +1,29 @@
-<!doctype html><html><head><meta charset="utf-8"><title>brainslug</title>
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>brainslug</title>
 <style>
 *{box-sizing:border-box}
 body{font-family:system-ui,sans-serif;margin:0;background:#0c0c10;color:#e6e6e6}
 header{padding:8px 14px;background:#1a1a22;border-bottom:1px solid #333;display:flex;gap:12px;align-items:center}
+header #logo{height:32px;width:auto;display:block}
 header h1{font-size:16px;margin:0;font-weight:600}
 #info{font-family:ui-monospace,monospace;font-size:12px;color:#8aa}
 main{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px;height:calc(100vh - 50px)}
+@media (max-width:720px){
+  main{grid-template-columns:1fr;height:auto}
+  section{min-height:50vh}
+  header{flex-wrap:wrap}
+  #info{font-size:11px}
+}
 section{background:#15151b;border:1px solid #2a2a35;border-radius:6px;display:flex;flex-direction:column;min-height:200px}
 section h2{font-size:13px;font-weight:600;margin:0;padding:8px 12px;background:#1a1a22;border-bottom:1px solid #2a2a35}
 .controls{padding:6px 10px;display:flex;gap:8px;align-items:center;font-size:12px;background:#13131a;border-bottom:1px solid #2a2a35}
 .controls select,.controls button{background:#23232c;color:#e6e6e6;border:1px solid #3a3a4a;padding:3px 8px;border-radius:3px;font:inherit}
-#term{flex:1;overflow:auto;font-family:ui-monospace,monospace;font-size:12px;padding:8px;white-space:pre-wrap;word-break:break-all;background:#000;color:#9f9}
+#term{width:calc(80ch + 16px);height:calc(40 * 1.2em + 16px);overflow-y:auto;overflow-x:hidden;font-family:ui-monospace,monospace;font-size:12px;line-height:1.2;padding:8px;white-space:pre-wrap;word-break:break-all;background:#000;color:#9f9;align-self:start;flex:none}
 #fft{flex:1}
 #fft-meta{padding:4px 10px;font-family:ui-monospace,monospace;font-size:11px;color:#8aa}
 </style></head>
 <body>
 <header>
+  <img id="logo" alt="brainslug" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADgAAABACAYAAABP97SyAAAIVElEQVRo3u2aa3CU1RnH/89zzvtudpeFCORCLphCgARDknJRWq3WW3XUYWy1U0fMeGNERW3rtBlRO7WORZ1RZxRhFKGaSqnWSynYWqVTi5eKDEgIERq5roSESAgk2fv7nvP0Q6eOGiwfukuc1f+n/XAuz2//z7m/eOqp5YQ8FgtkuGPILSAhrw0EI98dBOW7g/ltIJjy3sH85gMPdwC5B8z3MTjcAXwN+DXg8QAlvwfhV8DB/F8H85vwK5Ciea78Pw/mNx7AlOdZmvcpqrPd4KKlq+F5PjJpH79uvgIA8K1zr8NgEnAcDbE+JlQV4eVnHzwhgLR8+XKaN29eVmysqL8ePgchKgSWDLRNwEDD5whKvHcZkW+oWq/FX+/fLlri0GYQ0W2rcgqos7XQu6WXIZX2Apb1OcyD00lR1Ij9BymZoG3srMNqWhUlEXwHC2Ia6W0EvBoLTd1VWX819re15BIwSxLLoREj559/Rvl9ZSXByGvvDfo9Pf0dmVRyJxM2EGS1iMQAHitEs4WcpYH0gWeVpFedPO1KkysnswZoOVh6yqTCm+65dWpkXFFA3BFdeu3bodrOnbufEZN+xRibhLXxzNEDAxd1/+3FNxpunCGkfpXhk6QoveF30RzNdlkDVFoXjx8XKi4e7UIpQkWRlpGFEQ4Xjr7HDbjN1tqMNWbAFI3reevkhl3IpDbCz7wkpK8/FJi5uaJh+o7OrSuyDyhZOg9aa3s7DyYOf9yXHj16pIPdXYYSsSRYqZBbEAgTE5RS5cxcKyLf9T1/Xioe74n1xwJ+JjWfJNkMIJN1wGw1FHRs97adR5cufLj9l5ERgcL395jUoZ6+lzOJxCvxvl4L0ChWuoS1rtKOM8ktCFS7wWBpUSRC/b19TfEjmVUANmYdMGsOCkw6PrD0r2+ZcmY+RZM84SeOvsEFoWIifWpIJVqSXJHuencRlUyeG2Y3XMnaOdUNheZYwQUgNSUXgFnbp8Wiq1DgEBxNxZrNoyCscULhQWLn26T0zzwKl5zZGELd6fMlHAnHlKN3WHZb0of2XJOOx94iyEC24YAsOggAvhFNTBGAT4MYH+AuLem1sOptwD/w3JN3f6b8JZfOQ8cHPYk4FX9MRH4uALN6oufMkSRg1wHUBFI3CKmfg8gFZC/BmiH/7pjJNKPkQwviGEAn5QJQZ3P5YWYxYjtA1EMifYC0WfDIyzufOvRi+fXH6kj6/LEgQp8IF1fVX4l9bf9Z8GtnNSGeceCJA2EXQhqwPhQ8KHgo4Dh2bnnu+DFl80Ym2vEnFEj/ehb/RhBahXi6kPvEC5U3NRNsuLrhB0PqvL5hO0RsFJBJPWomSutuwLiGBeiwZ0KIi5hwhoJ/NZvk7QrefALOAWjsUToZ5dOuw+xZFxzHwSzfOVnSRoB2A6d9jNm1vJ8ray2pey0H4gV+1xJ8KmVWr2gGAJD13rbkzi2UndcI0XaCrSg1racZBGoFEgZ4MrN9TgQihPMMAiHHDLxGhJXRTHVfTWME/2p98dgOZnuDtG/rShzYugyzJjtIqdFGgHYS8yCgLhxwph1znBWkoh0k5gEQnctKLRTiJgFdSmIWK5u6AmLfFMimBBU2axu7msQsEtA3DRUsY/h1fVKOCZPPPzZgNmfRT2vtHx7G7taVOCv1JlhSHwDiW1E11Q2XDSnr6UIJUv/fWfw1GpnbXNM/l8SuF9A4Ihwi2L8A9L2xtFcRKCHgdxwbu5kgbwrphx0k65PBKV/gYI5feFd17EBRZlMcYtut0Nm79B1Dyny0/QX4ollI/9DAqRPSCZCsF9DpYWWIST4EqMyTYDja1oIS2g0hlSxI7HkcYl8W6HtZ0qUV0649cQ5+WkldJgSzBkRnVphlZeMbrhlSJj6iPk2QqAATP2p7BgTZD6KSuNEuxNtP4q22xnoAsKX1NexvexqZQKnVZuA3gOwUdhYwfDXUwROgHe3r4NjYFoJst3Bu1BJX4+s/C1l5+Hmw4hgRjQYAsv4utt7zYj0rcA6mJfSkZzlZWX8dqhvmAgA621tgyfVIMksAzDQqVDME8EQ4CABCjsfiPQpgZorGNAXTUS6vn4fJjT8CAGzp2AyI3Utids+5vAmGnC6f3N97TpHHkoq4Eqsh5joBjzmiJqKi4QbUTL0YndueRtPBFVFAOgQ8+/P9ZnWr9r8Ubfstihtu2+fY5C+EnfsGC2oqSLwVvTylu6zxZkAMTM/mlZVdG2UjfowKeYcP8vQqa80lhkecDSBAEGNBHDC96wjSctSdeKS88SY8sGCpjFuywGXIkAklqzuZ46mC9+KATNzsSOIWC/UTYXd50PZuJpJNAupG0XRzoGjGKAWvuotPmwFCFUE+BOzjiuw2Jut5Rk0RUvMN3BUs3gsgdJYtWTAbRNUk/iNDAO0JfAB9f8ta1DXOwVGU7XbT3T/1AiWNID7XCn0foAgRKQFSIuiG2H8y7EMV3L7nI9tgSQwIFgK9QZv4Vp+DF4HoQgFGEVE3iWnuC83aBSz7LCCd4Hvf9tY1AIDxdVf5IthkOLxpZLpN2UBpQDmaxc9kOmVqZhR1gyWNXpmArtaln9Sfc+Fl2NJVmLTQL41NvffHQVXlRB96Pl1+5y0oGXwdez/XHy1e/Djdeustw3a9fepZ1+LIYBoAQzsOrDUIh4J49dmrUDL+O19Y77yLr8K+LgPjGziOi0ljDuPP614dWvCxxxbn9Qsoi7XDHUNuAT0/JwfpL40YyHMH8/z1DGzyfQzm+YdOef5+DYC72tvz2kMuqa3J74UelN/zqIb5/xv5rxbeufCT3/cvun+42QDk5mvDL1XK52IW/dKk/B13LgTfdfddwx1HTvVvrz+8cCDlK8UAAAAASUVORK5CYII=">
   <h1>brainslug</h1>
   <span id="info">loading…</span>
 </header>
@@ -31,9 +39,24 @@ section h2{font-size:13px;font-weight:600;margin:0;padding:8px 12px;background:#
     <div id="term"></div>
   </section>
   <section>
-    <h2>audio fft</h2>
-    <div id="fft-meta">no /audio/ws — enable PROBE_AUDIO and reflash</div>
-    <canvas id="fft" width="800" height="400"></canvas>
+    <h2>camera</h2>
+    <div class="controls">
+      <button id="cam-snap">snapshot</button>
+      <button id="cam-stream">stream</button>
+      <button id="cam-stop">stop</button>
+      <button id="cam-rot">↻ 90°</button>
+      <button id="cam-flip">⇄ flip</button>
+      <span id="cam-state">idle</span>
+    </div>
+    <div class="controls" style="flex-wrap:wrap;gap:6px 12px">
+      <label><input type="checkbox" id="cam-aec" checked> exposure auto</label>
+      <label>val <input type="range" id="cam-aec-val" min="0" max="1200" value="300" style="vertical-align:middle"><span id="cam-aec-val-n">300</span></label>
+      <label><input type="checkbox" id="cam-agc" checked> gain auto</label>
+      <label>val <input type="range" id="cam-agc-val" min="0" max="30"   value="0"   style="vertical-align:middle"><span id="cam-agc-val-n">0</span></label>
+    </div>
+    <div id="cam-wrap" style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:#000;overflow:hidden">
+      <img id="cam" style="max-width:100%;max-height:100%;object-fit:contain;transition:transform .15s" alt="">
+    </div>
   </section>
 </main>
 <script>
@@ -64,26 +87,49 @@ addEventListener('keydown',e=>{
   if(b){ws.send(b);e.preventDefault()}
 });
 
-// Audio FFT canvas
-const cvs=document.getElementById('fft'),ctx=cvs.getContext('2d');
-const audioWs=new WebSocket(`ws://${location.host}/audio/ws`);
-audioWs.binaryType='arraybuffer';
-audioWs.onopen=()=>{document.getElementById('fft-meta').textContent='streaming'};
-audioWs.onmessage=e=>{
-  const dv=new DataView(e.data);
-  const sr=dv.getUint32(0,true), n=dv.getUint32(4,true);
-  const bins=new Int16Array(e.data, 8, n);
-  const W=cvs.width,H=cvs.height;
-  ctx.fillStyle='#0a0a10'; ctx.fillRect(0,0,W,H);
-  ctx.fillStyle='#3aa';
-  const bw=W/n;
-  for(let i=0;i<n;i++){
-    const db=bins[i]/256;          // Q8.8 -> float dB
-    const norm=Math.max(0,Math.min(1,(db+90)/90));   // -90..0 dB -> 0..1
-    const h=norm*H;
-    ctx.fillRect(i*bw,H-h,Math.max(1,bw-0.5),h);
-  }
-  document.getElementById('fft-meta').textContent=`${sr} Hz, ${n} bins, ${(sr/2/n).toFixed(1)} Hz/bin`;
-};
-audioWs.onerror=()=>{document.getElementById('fft-meta').textContent='/audio/ws unavailable (build with PROBE_AUDIO=y)'};
+
+// Camera
+const cam=document.getElementById('cam'),camState=document.getElementById('cam-state');
+let camRot=parseInt(localStorage.camRot||'0'), camFlip=localStorage.camFlip==='1';
+function applyCamXform(){
+  // When rotated 90/270, swap width/height constraints so it still fits.
+  const swap=(camRot%180!==0);
+  cam.style.transform=`rotate(${camRot}deg)${camFlip?' scaleX(-1)':''}`;
+  cam.style.maxWidth=swap?'100vh':'100%';
+  cam.style.maxHeight=swap?'100vw':'100%';
+  localStorage.camRot=camRot; localStorage.camFlip=camFlip?'1':'0';
+}
+applyCamXform();
+document.getElementById('cam-snap').onclick=()=>{cam.src='/camera/snapshot?'+Date.now();camState.textContent='snapshot'};
+document.getElementById('cam-stream').onclick=()=>{cam.src='/camera/stream?'+Date.now();camState.textContent='streaming'};
+document.getElementById('cam-stop').onclick=()=>{cam.src='';camState.textContent='idle'};
+document.getElementById('cam-rot').onclick=()=>{camRot=(camRot+90)%360;applyCamXform()};
+document.getElementById('cam-flip').onclick=()=>{camFlip=!camFlip;applyCamXform()};
+addEventListener('resize',applyCamXform);
+
+// Camera exposure / gain
+function camPost(body){
+  return fetch('/camera/controls',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(j=>{
+      // Reflect into UI when initial values come back
+      if(typeof j.exposure_auto==='boolean') document.getElementById('cam-aec').checked=j.exposure_auto;
+      if(typeof j.exposure_value==='number'){document.getElementById('cam-aec-val').value=j.exposure_value;document.getElementById('cam-aec-val-n').textContent=j.exposure_value}
+      if(typeof j.gain_auto==='boolean') document.getElementById('cam-agc').checked=j.gain_auto;
+      if(typeof j.gain_value==='number'){document.getElementById('cam-agc-val').value=j.gain_value;document.getElementById('cam-agc-val-n').textContent=j.gain_value}
+    });
+}
+const aec=document.getElementById('cam-aec'),aecV=document.getElementById('cam-aec-val'),aecN=document.getElementById('cam-aec-val-n');
+const agc=document.getElementById('cam-agc'),agcV=document.getElementById('cam-agc-val'),agcN=document.getElementById('cam-agc-val-n');
+aec.onchange=()=>camPost({exposure_auto:aec.checked});
+agc.onchange=()=>camPost({gain_auto:agc.checked});
+let aecT=null,agcT=null;
+aecV.oninput=()=>{aecN.textContent=aecV.value;clearTimeout(aecT);aecT=setTimeout(()=>{aec.checked=false;camPost({exposure_auto:false,exposure_value:+aecV.value})},150)};
+agcV.oninput=()=>{agcN.textContent=agcV.value;clearTimeout(agcT);agcT=setTimeout(()=>{agc.checked=false;camPost({gain_auto:false,gain_value:+agcV.value})},150)};
+// initial state pull
+fetch('/camera/info').then(r=>r.json()).then(j=>{
+  if(typeof j.exposure_auto==='boolean') aec.checked=j.exposure_auto;
+  if(typeof j.exposure_value==='number'){aecV.value=j.exposure_value;aecN.textContent=j.exposure_value}
+  if(typeof j.gain_auto==='boolean') agc.checked=j.gain_auto;
+  if(typeof j.gain_value==='number'){agcV.value=j.gain_value;agcN.textContent=j.gain_value}
+});
 </script></body></html>

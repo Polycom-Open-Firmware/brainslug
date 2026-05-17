@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "cJSON.h"
 #include "probe.h"
+#include "led.h"
 
 static const char *TAG = "http-api";
 static httpd_handle_t s_srv = NULL;
@@ -130,6 +131,25 @@ static esp_err_t gpio_post(httpd_req_t *r)
     cJSON_AddNumberToObject(resp, "pin", pin);
     cJSON_AddNumberToObject(resp, "level", gpio_get_level(pin));
     return send_json(r, resp, 200);
+}
+
+/* ===================== /led ===================== */
+/* GET /led?r=&g=&b=  (0-255 each; absent => 0). No args => off. */
+static esp_err_t led_get(httpd_req_t *r)
+{
+    char q[48]; int rr = 0, gg = 0, bb = 0;
+    if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK) {
+        char v[8];
+        if (httpd_query_key_value(q, "r", v, sizeof v) == ESP_OK) rr = atoi(v);
+        if (httpd_query_key_value(q, "g", v, sizeof v) == ESP_OK) gg = atoi(v);
+        if (httpd_query_key_value(q, "b", v, sizeof v) == ESP_OK) bb = atoi(v);
+    }
+    led_set((uint8_t)rr, (uint8_t)gg, (uint8_t)bb);
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddNumberToObject(j, "r", rr & 0xff);
+    cJSON_AddNumberToObject(j, "g", gg & 0xff);
+    cJSON_AddNumberToObject(j, "b", bb & 0xff);
+    return send_json(r, j, 200);
 }
 
 /* ===================== /uart/N/... ===================== */
@@ -488,6 +508,7 @@ esp_err_t http_api_start(void)
         { "/net",             HTTP_POST, net_post,        NULL, false, false, NULL },
         { "/ota",             HTTP_POST, ota_post,        NULL, false, false, NULL },
         { "/reboot",          HTTP_POST, reboot_post,     NULL, false, false, NULL },
+        { "/led",             HTTP_GET,  led_get,         NULL, false, false, NULL },
     };
     for (size_t i = 0; i < sizeof routes / sizeof *routes; ++i)
         ESP_ERROR_CHECK(httpd_register_uri_handler(s_srv, &routes[i]));

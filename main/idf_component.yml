@@ -5,4 +5,5 @@ dependencies:
     rules:
       - if: "target in [esp32s3]"
   espressif/esp-dsp: "^1.4.12"
+  espressif/led_strip: "^2.5.0"
   idf: ">=5.0"

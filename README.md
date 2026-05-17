@@ -119,3 +119,20 @@ curl -XPOST --data-binary @build/wesp_debug_probe.bin http://wesp-probe.local/ot
 - **No API auth.** Run on a trusted segment or wrap in a reverse proxy.
 - **mDNS:** advertises `_http._tcp` on the configured hostname (default
   `wesp-probe`). Change via `/net`.
+
+## WS2812 onboard RGB LED (s3-poe-eth-cam) — GPIO21
+
+The Waveshare board's WS2812 powers up **full-white** and washes out the
+camera; it latches from a serial frame, so GPIO-input/power-cycle can't
+turn it off — only clocking it a {0,0,0} frame does. `main/led.c`
+(led_strip/RMT) blanks it at boot (`led_init()` first thing in
+`app_main`) and exposes runtime control:
+
+    GET /led?r=&g=&b=     # 0-255 each; no args = off
+
+Note: this `led_strip` (2.5.5 here) uses the **older API**
+(`led_pixel_format`/`LED_PIXEL_FORMAT_GRB`, not
+`color_component_format`). Build on tc8 (`/root/brainslug`,
+`. /root/esp-idf/export.sh && idf.py build`), OTA via
+`curl --data-binary @build/brainslug.bin http://192.168.10.95/ota`
+(dual-slot; PoE port-4 cycle reverts a bad image).
