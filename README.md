@@ -1,3 +1,6 @@
+
+This is depricated.
+
 # Brainslug
 
 Network-attached debug probe firmware. Exposes an HTTP + WebSocket API so an
